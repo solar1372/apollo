@@ -1,0 +1,255 @@
+{
+  "started_at": "2026-11-05T08:02:49.664866+00:00",
+  "uid_count": 3,
+  "uids": [
+    "2803301701",
+    "1669879400",
+    "1934184475"
+  ],
+  "max_pages": 2,
+  "delay_s": 1.2,
+  "has_cookie": false,
+  "profile_ok_count": 3,
+  "pages_tried": 6,
+  "pages_ok": 0,
+  "page_success_rate": 0.0,
+  "posts_fetched": 0,
+  "auth_wall_hits": 6,
+  "rate_limit_hits": 0,
+  "latencies_ms": [
+    1158.1,
+    1560.2,
+    1064.7,
+    1152.3,
+    1527.0,
+    784.6,
+    1202.3,
+    1497.4,
+    1078.3
+  ],
+  "per_uid": {
+    "2803301701": {
+      "uid": "2803301701",
+      "screen_name": "人民日报",
+      "profile_ok": true,
+      "pages_ok": 0,
+      "pages_tried": 2,
+      "posts_fetched": 0,
+      "total_hint": null,
+      "auth_wall": true,
+      "rate_limited": false,
+      "errors": [
+        "timeline_p1:auth_wall_ok_-100",
+        "guest:auth_wall_login_card"
+      ],
+      "latencies_ms": [
+        1158.1,
+        1560.2,
+        1064.7
+      ]
+    },
+    "1669879400": {
+      "uid": "1669879400",
+      "screen_name": "Dear-迪丽热巴",
+      "profile_ok": true,
+      "pages_ok": 0,
+      "pages_tried": 2,
+      "posts_fetched": 0,
+      "total_hint": null,
+      "auth_wall": true,
+      "rate_limited": false,
+      "errors": [
+        "timeline_p1:auth_wall_ok_-100",
+        "guest:auth_wall_login_card"
+      ],
+      "latencies_ms": [
+        1152.3,
+        1527.0,
+        784.6
+      ]
+    },
+    "1934184475": {
+      "uid": "1934184475",
+      "screen_name": "哦哦哼哼_796_577",
+      "profile_ok": true,
+      "pages_ok": 0,
+      "pages_tried": 2,
+      "posts_fetched": 0,
+      "total_hint": null,
+      "auth_wall": true,
+      "rate_limited": false,
+      "errors": [
+        "timeline_p1:auth_wall_ok_-100",
+        "guest:auth_wall_login_card"
+      ],
+      "latencies_ms": [
+        1202.3,
+        1497.4,
+        1078.3
+      ]
+    }
+  },
+  "results": [
+    {
+      "uid": "2803301701",
+      "endpoint": "api.weibo.cn/2/profile",
+      "page": 0,
+      "ok": true,
+      "http_status": 200,
+      "latency_ms": 1158.1,
+      "posts": 0,
+      "screen_name": "人民日报",
+      "total_hint": null,
+      "error": null,
+      "auth_wall": false,
+      "rate_limited": false,
+      "final_url": "https://api.weibo.cn/2/profile?uid=2803301701",
+      "raw_ok": null
+    },
+    {
+      "uid": "2803301701",
+      "endpoint": "m.weibo.cn/api/container/getIndex",
+      "page": 1,
+      "ok": false,
+      "http_status": 200,
+      "latency_ms": 1560.2,
+      "posts": 0,
+      "screen_name": null,
+      "total_hint": null,
+      "error": "auth_wall_ok_-100",
+      "auth_wall": true,
+      "rate_limited": false,
+      "final_url": "https://m.weibo.cn/api/container/getIndex?type=uid&value=2803301701&containerid=1076032803301701",
+      "raw_ok": -100
+    },
+    {
+      "uid": "2803301701",
+      "endpoint": "api.weibo.cn/2/guest/cardlist",
+      "page": 1,
+      "ok": false,
+      "http_status": 200,
+      "latency_ms": 1064.7,
+      "posts": 0,
+      "screen_name": null,
+      "total_hint": 0,
+      "error": "auth_wall_login_card",
+      "auth_wall": true,
+      "rate_limited": false,
+      "final_url": "https://api.weibo.cn/2/guest/cardlist?containerid=1076032803301701",
+      "raw_ok": null
+    },
+    {
+      "uid": "1669879400",
+      "endpoint": "api.weibo.cn/2/profile",
+      "page": 0,
+      "ok": true,
+      "http_status": 200,
+      "latency_ms": 1152.3,
+      "posts": 0,
+      "screen_name": "Dear-迪丽热巴",
+      "total_hint": null,
+      "error": null,
+      "auth_wall": false,
+      "rate_limited": false,
+      "final_url": "https://api.weibo.cn/2/profile?uid=1669879400",
+      "raw_ok": null
+    },
+    {
+      "uid": "1669879400",
+      "endpoint": "m.weibo.cn/api/container/getIndex",
+      "page": 1,
+      "ok": false,
+      "http_status": 200,
+      "latency_ms": 1527.0,
+      "posts": 0,
+      "screen_name": null,
+      "total_hint": null,
+      "error": "auth_wall_ok_-100",
+      "auth_wall": true,
+      "rate_limited": false,
+      "final_url": "https://m.weibo.cn/api/container/getIndex?type=uid&value=1669879400&containerid=1076031669879400",
+      "raw_ok": -100
+    },
+    {
+      "uid": "1669879400",
+      "endpoint": "api.weibo.cn/2/guest/cardlist",
+      "page": 1,
+      "ok": false,
+      "http_status": 200,
+      "latency_ms": 784.6,
+      "posts": 0,
+      "screen_name": null,
+      "total_hint": 0,
+      "error": "auth_wall_login_card",
+      "auth_wall": true,
+      "rate_limited": false,
+      "final_url": "https://api.weibo.cn/2/guest/cardlist?containerid=1076031669879400",
+      "raw_ok": null
+    },
+    {
+      "uid": "1934184475",
+      "endpoint": "api.weibo.cn/2/profile",
+      "page": 0,
+      "ok": true,
+      "http_status": 200,
+      "latency_ms": 1202.3,
+      "posts": 0,
+      "screen_name": "哦哦哼哼_796_577",
+      "total_hint": null,
+      "error": null,
+      "auth_wall": false,
+      "rate_limited": false,
+      "final_url": "https://api.weibo.cn/2/profile?uid=1934184475",
+      "raw_ok": null
+    },
+    {
+      "uid": "1934184475",
+      "endpoint": "m.weibo.cn/api/container/getIndex",
+      "page": 1,
+      "ok": false,
+      "http_status": 200,
+      "latency_ms": 1497.4,
+      "posts": 0,
+      "screen_name": null,
+      "total_hint": null,
+      "error": "auth_wall_ok_-100",
+      "auth_wall": true,
+      "rate_limited": false,
+      "final_url": "https://m.weibo.cn/api/container/getIndex?type=uid&value=1934184475&containerid=1076031934184475",
+      "raw_ok": -100
+    },
+    {
+      "uid": "1934184475",
+      "endpoint": "api.weibo.cn/2/guest/cardlist",
+      "page": 1,
+      "ok": false,
+      "http_status": 200,
+      "latency_ms": 1078.3,
+      "posts": 0,
+      "screen_name": null,
+      "total_hint": 0,
+      "error": "auth_wall_login_card",
+      "auth_wall": true,
+      "rate_limited": false,
+      "final_url": "https://api.weibo.cn/2/guest/cardlist?containerid=1076031934184475",
+      "raw_ok": null
+    }
+  ],
+  "estimate_90k": {
+    "target_users": 90000,
+    "assume_posts_per_user": 500,
+    "assume_page_size": 20,
+    "pages_per_user": 25,
+    "total_requests": 2250000,
+    "observed_page_success_rate": 0.0,
+    "estimated_serial_hours_at_delay": 1473.81,
+    "note": "以上为理想串行估算。未计入登录墙、验证码、封禁、IP 风控；实测成功率接近 0 时，全量方案在非官方通道下不可行。"
+  },
+  "channels": [
+    "api.weibo.cn/2/profile",
+    "m.weibo.cn/api/container/getIndex",
+    "api.weibo.cn/2/guest/cardlist"
+  ],
+  "disclaimer": "本程序仅用于小样本可行性验证；请遵守法律法规与微博服务条款。全量/商业分析请使用微博开放平台正式授权接口。",
+  "verdict": "按 UID 抓取博文：不可行。资料接口可通 (3/3)，但博文时间线全部登录墙。未授权通道无法支撑 9 万用户全量博文采集。"
+}

@@ -1,0 +1,10 @@
+*.cookie
+cookie.txt
+weibo.cookie
+*.gsid
+gsid.txt
+probe_report.json
+.env
+__pycache__/
+*.pyc
+__pycache__/
