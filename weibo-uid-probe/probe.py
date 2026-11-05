@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import statistics
@@ -24,6 +25,11 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+try:
+    import brotli as _brotli
+except ImportError:  # pragma: no cover
+    _brotli = None
 
 
 DEFAULT_UA = (
@@ -41,7 +47,23 @@ PROFILE_URL = "https://api.weibo.cn/2/profile"
 GUEST_CARDLIST_URL = "https://api.weibo.cn/2/guest/cardlist"
 PC_PROFILE_URL = "https://weibo.com/ajax/profile/info"
 PC_TIMELINE_URL = "https://weibo.com/ajax/statuses/mymblog"
+MP_CARDLIST_URL = "https://api.weibo.cn/2/cardlist"
+MP_PROFILE_STATUSES_URL = "https://api.weibo.cn/2/profile/statuses"
+MP_USERS_SHOW_URL = "https://api.weibo.cn/2/users/show"
+MP_UNREAD_URL = "https://api.weibo.cn/2/remind/unread_count"
 TIMELINE_CONTAINER_PREFIX = "107603"
+# 微信小程序客户端标识（非用户密钥；用户密钥是 gsid）
+MP_DEFAULT_FROM = "1885396040"
+MP_DEFAULT_WM = "90163_90001"
+MP_DEFAULT_S = "5f858072"
+MP_REFERER = "https://servicewechat.com/wx9074de28009e1111/296/page-frame.html"
+MP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 "
+    "MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI "
+    "MiniProgramEnv/Windows WindowsWechat/WMPF "
+    "WindowsWechat(0x63090a13) UnifiedPCWindowsWechat(0xf2541f38) XWEB/25819"
+)
 
 
 @dataclass
@@ -99,6 +121,30 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--cookie-file",
         help="从文件读取 Cookie（推荐：一行完整 Cookie，避免出现在 shell 历史里）",
+    )
+    p.add_argument(
+        "--gsid",
+        default=os.environ.get("WEIBO_GSID", ""),
+        help="小程序 gsid（也可用环境变量 WEIBO_GSID）。勿提交仓库/勿贴聊天。",
+    )
+    p.add_argument(
+        "--gsid-file",
+        help="从文件读取 gsid（一行）",
+    )
+    p.add_argument(
+        "--mp-s",
+        default=os.environ.get("WEIBO_MP_S", MP_DEFAULT_S),
+        help="小程序参数 s（客户端标识，默认内置）",
+    )
+    p.add_argument(
+        "--mp-from",
+        default=os.environ.get("WEIBO_MP_FROM", MP_DEFAULT_FROM),
+        help="小程序参数 from",
+    )
+    p.add_argument(
+        "--mp-wm",
+        default=os.environ.get("WEIBO_MP_WM", MP_DEFAULT_WM),
+        help="小程序参数 wm",
     )
     p.add_argument(
         "--max-uids",
@@ -182,18 +228,28 @@ def load_uids(args: argparse.Namespace) -> list[str]:
     return out[: args.max_uids]
 
 
+def _read_secret_line(path: str) -> str:
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            return line
+    return ""
+
+
 def resolve_cookie(args: argparse.Namespace) -> str:
     cookie = (args.cookie or "").strip()
     if args.cookie_file:
-        with open(args.cookie_file, encoding="utf-8") as f:
-            # 允许文件里写注释行；取第一条非空非 # 行
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                cookie = line
-                break
+        cookie = _read_secret_line(args.cookie_file) or cookie
     return cookie
+
+
+def resolve_gsid(args: argparse.Namespace) -> str:
+    gsid = (args.gsid or "").strip()
+    if args.gsid_file:
+        gsid = _read_secret_line(args.gsid_file) or gsid
+    return gsid
 
 
 def cookie_diagnostics(cookie: str) -> dict[str, Any]:
@@ -236,6 +292,27 @@ def build_opener(
     return opener
 
 
+def _decode_http_body(raw: bytes, headers: Any) -> str:
+    enc = ""
+    try:
+        enc = (headers.get("Content-Encoding") if headers else "") or ""
+    except Exception:  # noqa: BLE001
+        enc = ""
+    enc = str(enc).lower()
+    if enc == "br" or (raw and _brotli is not None and raw[:2] != b"\x1f\x8b"):
+        if _brotli is not None:
+            try:
+                return _brotli.decompress(raw).decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
+    if enc == "gzip" or raw[:2] == b"\x1f\x8b":
+        try:
+            return gzip.decompress(raw).decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+    return raw.decode("utf-8", errors="replace")
+
+
 def fetch_json(
     opener: urllib.request.OpenerDirector,
     url: str,
@@ -248,7 +325,7 @@ def fetch_json(
             latency = (time.perf_counter() - started) * 1000
             final_url = resp.geturl()
             status = getattr(resp, "status", None) or resp.getcode()
-            text = body.decode("utf-8", errors="replace")
+            text = _decode_http_body(body, resp.headers)
             if "passport.weibo" in final_url or "visitor.passport" in final_url:
                 return status, latency, None, "auth_wall_redirect", final_url
             if not text.strip():
@@ -262,7 +339,8 @@ def fetch_json(
                 return status, latency, None, f"non_json:{snippet}", final_url
     except urllib.error.HTTPError as e:
         latency = (time.perf_counter() - started) * 1000
-        body = e.read().decode("utf-8", errors="replace") if e.fp else ""
+        raw = e.read() if e.fp else b""
+        body = _decode_http_body(raw, getattr(e, "headers", None)) if raw else ""
         err = f"http_{e.code}"
         if e.code in (403, 418, 429, 432):
             err = f"rate_or_forbidden_{e.code}"
@@ -272,6 +350,169 @@ def fetch_json(
     except Exception as e:  # noqa: BLE001 - probe should never crash mid-run
         latency = (time.perf_counter() - started) * 1000
         return None, latency, None, f"{type(e).__name__}:{e}", None
+
+
+def build_mp_opener(gsid: str, mp_s: str, mp_from: str, mp_wm: str) -> tuple[urllib.request.OpenerDirector, dict[str, str]]:
+    """返回 opener + 公共 query 参数（不含业务 uid/page）。"""
+    opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
+    opener.addheaders = [
+        ("User-Agent", MP_UA),
+        ("Accept", "*/*"),
+        ("Content-Type", "application/json"),
+        ("Referer", MP_REFERER),
+        ("xweb_xhr", "1"),
+        ("Accept-Encoding", "gzip, deflate, br"),
+        ("Accept-Language", "zh-CN,zh;q=0.9"),
+    ]
+    common = {
+        "c": "weixinminiprogram",
+        "s": mp_s,
+        "from": mp_from,
+        "wm": mp_wm,
+        "lang": "zh_CN",
+        "gsid": gsid,
+    }
+    return opener, common
+
+
+def mp_url(path: str, common: dict[str, str], extra: dict[str, str]) -> str:
+    q = dict(common)
+    q.update(extra)
+    return f"https://api.weibo.cn{path}?{urllib.parse.urlencode(q)}"
+
+
+def probe_mp_users_show(
+    opener: urllib.request.OpenerDirector,
+    common: dict[str, str],
+    uid: str,
+    timeout: float,
+) -> PageResult:
+    url = mp_url("/2/users/show", common, {"uid": uid})
+    status, latency, data, err, final_url = fetch_json(opener, url, timeout)
+    screen_name = None
+    total_hint = None
+    posts = 0
+    ok = False
+    if isinstance(data, dict) and data.get("id") is not None and not data.get("errno"):
+        screen_name = data.get("screen_name")
+        if isinstance(data.get("statuses_count"), int):
+            total_hint = data["statuses_count"]
+        if isinstance(data.get("status"), dict):
+            posts = 1
+        ok = True
+    elif isinstance(data, dict) and data.get("errno"):
+        err = err or f"errno:{data.get('errno')}:{data.get('errmsg')}"
+    return PageResult(
+        uid=uid,
+        endpoint="api.weibo.cn/2/users/show",
+        page=0,
+        ok=ok,
+        http_status=status,
+        latency_ms=round(latency, 1),
+        posts=posts,
+        screen_name=screen_name,
+        total_hint=total_hint,
+        error=err,
+        auth_wall=bool(err and "auth" in err),
+        rate_limited=bool(err and "rate_or_forbidden" in (err or "")),
+        final_url=final_url,
+        raw_ok=None if not isinstance(data, dict) else data.get("errno"),
+    )
+
+
+def probe_mp_cardlist(
+    opener: urllib.request.OpenerDirector,
+    common: dict[str, str],
+    uid: str,
+    page: int,
+    timeout: float,
+) -> PageResult:
+    containerid = f"{TIMELINE_CONTAINER_PREFIX}{uid}"
+    url = mp_url(
+        "/2/cardlist",
+        common,
+        {"containerid": containerid, "page": str(page), "count": "20"},
+    )
+    status, latency, data, err, final_url = fetch_json(opener, url, timeout)
+    posts = 0
+    total_hint = None
+    auth_wall = False
+    if isinstance(data, dict):
+        if data.get("errno"):
+            err = err or f"errno:{data.get('errno')}:{data.get('errmsg')}"
+        posts, total_hint = _count_mblogs(data)
+        info = data.get("cardlistInfo")
+        if isinstance(info, dict) and isinstance(info.get("total"), int):
+            total_hint = info["total"]
+        # 登录引导
+        aw, err2 = detect_auth_wall(data, err, final_url)
+        auth_wall, err = aw, err2
+    ok = status == 200 and err is None and not auth_wall and isinstance(data, dict) and "cards" in data
+    return PageResult(
+        uid=uid,
+        endpoint="api.weibo.cn/2/cardlist",
+        page=page,
+        ok=ok,
+        http_status=status,
+        latency_ms=round(latency, 1),
+        posts=posts,
+        total_hint=total_hint,
+        error=err,
+        auth_wall=auth_wall,
+        rate_limited=bool(err and "rate_or_forbidden" in (err or "")),
+        final_url=final_url,
+        raw_ok=None if not isinstance(data, dict) else data.get("errno"),
+    )
+
+
+def probe_mp_profile_statuses(
+    opener: urllib.request.OpenerDirector,
+    common: dict[str, str],
+    uid: str,
+    page: int,
+    timeout: float,
+) -> PageResult:
+    containerid = f"{TIMELINE_CONTAINER_PREFIX}{uid}"
+    url = mp_url(
+        "/2/profile/statuses",
+        common,
+        {"uid": uid, "containerid": containerid, "page": str(page), "count": "20"},
+    )
+    status, latency, data, err, final_url = fetch_json(opener, url, timeout)
+    posts = 0
+    total_hint = None
+    auth_wall = False
+    if isinstance(data, dict):
+        if data.get("errno"):
+            err = err or f"errno:{data.get('errno')}:{data.get('errmsg')}"
+        posts, total_hint = _count_mblogs(data)
+        info = data.get("cardlistInfo")
+        if isinstance(info, dict) and isinstance(info.get("total"), int):
+            total_hint = info["total"]
+        aw, err2 = detect_auth_wall(data, err, final_url)
+        auth_wall, err = aw, err2
+    ok = (
+        status == 200
+        and err is None
+        and not auth_wall
+        and isinstance(data, dict)
+        and ("cards" in data or "statuses" in data)
+    )
+    return PageResult(
+        uid=uid,
+        endpoint="api.weibo.cn/2/profile/statuses",
+        page=page,
+        ok=ok,
+        http_status=status,
+        latency_ms=round(latency, 1),
+        posts=posts,
+        total_hint=total_hint,
+        error=err,
+        auth_wall=auth_wall,
+        rate_limited=bool(err and "rate_or_forbidden" in (err or "")),
+        final_url=final_url,
+        raw_ok=None if not isinstance(data, dict) else data.get("errno"),
+    )
 
 
 def _count_mblogs(payload: dict[str, Any]) -> tuple[int, int | None]:
@@ -604,6 +845,14 @@ def verdict_from(report: dict[str, Any]) -> str:
         return "未发起请求（dry-run 或无 UID）"
     profile_ok = report.get("profile_ok_count", 0)
     pc_posts = report.get("pc_posts_fetched", 0)
+    mp_posts = report.get("mp_posts_fetched", 0)
+    if mp_posts > 0:
+        return (
+            "有小程序 gsid 时，api.weibo.cn/2/cardlist（containerid=107603{uid}）"
+            "可按 UID 抽样读到博文。"
+            "你贴的 unread_count 只用于校验登录态，不是博文列表接口。"
+            "小样本可读 ≠ 9 万全量可行（限流/风控/账号封禁/合规仍卡死全量）。"
+        )
     if pc_posts > 0:
         return (
             "有登录 Cookie 时，weibo.com/ajax 可按 UID 抽样读到博文；"
@@ -642,6 +891,7 @@ def main() -> int:
 
     cookie = resolve_cookie(args)
     cookie_meta = cookie_diagnostics(cookie) if cookie else {"provided": False}
+    gsid = resolve_gsid(args)
 
     if args.dry_run:
         est = estimate(
@@ -657,6 +907,7 @@ def main() -> int:
                 {
                     "uids": uids,
                     "cookie": {"provided": bool(cookie), **(cookie_meta if cookie else {})},
+                    "gsid": {"provided": bool(gsid), "length": len(gsid) if gsid else 0},
                     "estimate": est,
                 },
                 ensure_ascii=False,
@@ -684,9 +935,20 @@ def main() -> int:
             "[info] 未提供 Cookie。可用 --cookie-file / WEIBO_COOKIE / --cookie 注入登录态后再测",
             file=sys.stderr,
         )
+    if gsid:
+        print(f"[info] 已加载小程序 gsid（len={len(gsid)}，值不打印）", file=sys.stderr)
+    else:
+        print(
+            "[info] 未提供 gsid。小程序通道可用 --gsid-file / WEIBO_GSID",
+            file=sys.stderr,
+        )
 
     opener = build_opener(cookie)
     pc_opener = build_opener(cookie, desktop=True) if cookie else None
+    mp_opener = None
+    mp_common: dict[str, str] | None = None
+    if gsid:
+        mp_opener, mp_common = build_mp_opener(gsid, args.mp_s, args.mp_from, args.mp_wm)
     all_results: list[PageResult] = []
     timeline_results: list[PageResult] = []
     summaries: dict[str, UidSummary] = {u: UidSummary(uid=u) for u in uids}
@@ -734,6 +996,21 @@ def main() -> int:
         )
 
     for i, uid in enumerate(uids):
+        # -1) 微信小程序 gsid 通道
+        if mp_opener is not None and mp_common is not None:
+            mp_user = probe_mp_users_show(mp_opener, mp_common, uid, args.timeout)
+            record(mp_user, timeline=False, label="mp/users.show")
+            time.sleep(args.delay)
+            for page in range(1, args.max_pages + 1):
+                mp_cl = probe_mp_cardlist(mp_opener, mp_common, uid, page, args.timeout)
+                record(mp_cl, timeline=True, label="mp/cardlist")
+                time.sleep(args.delay)
+                if mp_cl.auth_wall or mp_cl.rate_limited:
+                    break
+            mp_ps = probe_mp_profile_statuses(mp_opener, mp_common, uid, 1, args.timeout)
+            record(mp_ps, timeline=True, label="mp/profile.statuses")
+            time.sleep(args.delay)
+
         # 0) PC Cookie 通道（weibo.com/ajax）——与你从网页复制的 Cookie 匹配
         if pc_opener is not None:
             pc_profile = probe_pc_profile(pc_opener, uid, args.timeout)
@@ -775,6 +1052,11 @@ def main() -> int:
         for r in timeline_results
         if r.ok and r.endpoint.endswith("mymblog")
     )
+    mp_posts = sum(
+        r.posts
+        for r in timeline_results
+        if r.ok and ("cardlist" in r.endpoint or "profile/statuses" in r.endpoint)
+    )
     report = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "uid_count": len(uids),
@@ -782,6 +1064,7 @@ def main() -> int:
         "max_pages": args.max_pages,
         "delay_s": args.delay,
         "has_cookie": bool(cookie),
+        "has_gsid": bool(gsid),
         "cookie_meta": cookie_meta if cookie else {"provided": False},
         "profile_ok_count": sum(1 for u in uids if summaries[u].profile_ok),
         "pages_tried": pages_tried,
@@ -789,6 +1072,7 @@ def main() -> int:
         "page_success_rate": success_rate,
         "posts_fetched": posts_fetched,
         "pc_posts_fetched": pc_posts,
+        "mp_posts_fetched": mp_posts,
         "auth_wall_hits": sum(1 for r in all_results if r.auth_wall),
         "rate_limit_hits": sum(1 for r in all_results if r.rate_limited),
         "latencies_ms": latencies,
@@ -803,6 +1087,10 @@ def main() -> int:
             statistics.median(latencies) if latencies else None,
         ),
         "channels": [
+            "api.weibo.cn/2/users/show",
+            "api.weibo.cn/2/cardlist",
+            "api.weibo.cn/2/profile/statuses",
+            "api.weibo.cn/2/remind/unread_count",
             "weibo.com/ajax/profile/info",
             "weibo.com/ajax/statuses/mymblog",
             "api.weibo.cn/2/profile",
