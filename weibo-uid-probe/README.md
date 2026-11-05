@@ -39,9 +39,13 @@ python3 weibo-uid-probe/probe.py --dry-run --uids-file weibo-uid-probe/uids.samp
 
 | 接口 | 作用 |
 |------|------|
-| `GET https://api.weibo.cn/2/profile?uid=` | 用户资料（常可匿名） |
-| `GET https://m.weibo.cn/api/container/getIndex?type=uid&value=&containerid=107603{uid}` | 博文时间线 |
+| `GET https://weibo.com/ajax/profile/info?uid=` | PC 资料（需网页登录 Cookie） |
+| `GET https://weibo.com/ajax/statuses/mymblog?uid=&page=` | PC 博文时间线（需网页登录 Cookie） |
+| `GET https://api.weibo.cn/2/profile?uid=` | 移动资料（常可匿名） |
+| `GET https://m.weibo.cn/api/container/getIndex?type=uid&value=&containerid=107603{uid}` | 手机站时间线 |
 | `GET https://api.weibo.cn/2/guest/cardlist?containerid=107603{uid}` | 访客时间线对照 |
+
+从 `weibo.com` 复制的 Cookie（含 `SUB`/`SUBP`/`SCF`/`WBPSESS`）对齐 **PC ajax** 通道；同一份 Cookie 对 `m.weibo.cn` 仍常 `ok=-100`。
 
 ## 如何解读
 

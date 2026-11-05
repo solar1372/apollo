@@ -31,9 +31,16 @@ DEFAULT_UA = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
     "Mobile/15E148 Safari/604.1"
 )
+DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 TIMELINE_URL = "https://m.weibo.cn/api/container/getIndex"
 PROFILE_URL = "https://api.weibo.cn/2/profile"
 GUEST_CARDLIST_URL = "https://api.weibo.cn/2/guest/cardlist"
+PC_PROFILE_URL = "https://weibo.com/ajax/profile/info"
+PC_TIMELINE_URL = "https://weibo.com/ajax/statuses/mymblog"
 TIMELINE_CONTAINER_PREFIX = "107603"
 
 
@@ -209,14 +216,18 @@ def cookie_diagnostics(cookie: str) -> dict[str, Any]:
     }
 
 
-def build_opener(cookie: str) -> urllib.request.OpenerDirector:
+def build_opener(
+    cookie: str,
+    *,
+    desktop: bool = False,
+) -> urllib.request.OpenerDirector:
     handlers = [urllib.request.HTTPRedirectHandler()]
     opener = urllib.request.build_opener(*handlers)
     headers = {
-        "User-Agent": DEFAULT_UA,
+        "User-Agent": DESKTOP_UA if desktop else DEFAULT_UA,
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Referer": "https://m.weibo.cn/",
+        "Referer": "https://weibo.com/" if desktop else "https://m.weibo.cn/",
         "X-Requested-With": "XMLHttpRequest",
     }
     if cookie:
@@ -408,6 +419,91 @@ def probe_page(
     )
 
 
+def probe_pc_profile(
+    opener: urllib.request.OpenerDirector,
+    uid: str,
+    timeout: float,
+) -> PageResult:
+    url = f"{PC_PROFILE_URL}?{urllib.parse.urlencode({'uid': uid})}"
+    status, latency, data, err, final_url = fetch_json(opener, url, timeout)
+    auth_wall, err = detect_auth_wall(data, err, final_url)
+    screen_name = None
+    total_hint = None
+    ok = False
+    if isinstance(data, dict):
+        user = (data.get("data") or {}).get("user") if isinstance(data.get("data"), dict) else None
+        if isinstance(user, dict):
+            screen_name = user.get("screen_name")
+            if isinstance(user.get("statuses_count"), int):
+                total_hint = user["statuses_count"]
+            ok = data.get("ok") == 1 and user.get("id") is not None and not auth_wall
+        elif data.get("ok") == -100 or data.get("ok") == "-100":
+            auth_wall = True
+            err = err or "auth_wall_ok_-100"
+    return PageResult(
+        uid=uid,
+        endpoint="weibo.com/ajax/profile/info",
+        page=0,
+        ok=ok,
+        http_status=status,
+        latency_ms=round(latency, 1),
+        screen_name=screen_name,
+        total_hint=total_hint,
+        error=err,
+        auth_wall=auth_wall,
+        rate_limited=bool(err and "rate_or_forbidden" in (err or "")),
+        final_url=final_url,
+        raw_ok=data.get("ok") if isinstance(data, dict) else None,
+    )
+
+
+def probe_pc_timeline(
+    opener: urllib.request.OpenerDirector,
+    uid: str,
+    page: int,
+    timeout: float,
+) -> PageResult:
+    query = {"uid": uid, "page": str(page), "feature": "0"}
+    url = f"{PC_TIMELINE_URL}?{urllib.parse.urlencode(query)}"
+    status, latency, data, err, final_url = fetch_json(opener, url, timeout)
+    auth_wall, err = detect_auth_wall(data, err, final_url)
+    posts = 0
+    total_hint = None
+    raw_ok = None
+    if isinstance(data, dict):
+        raw_ok = data.get("ok")
+        payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+        lst = payload.get("list") if isinstance(payload, dict) else None
+        if isinstance(lst, list):
+            posts = len(lst)
+        if isinstance(payload, dict) and isinstance(payload.get("total"), int):
+            total_hint = payload["total"]
+        if raw_ok in (-100, "-100"):
+            auth_wall = True
+            err = err or "auth_wall_ok_-100"
+    ok = status == 200 and not auth_wall and err is None and raw_ok == 1 and posts >= 0
+    # 空博文用户也算接口成功（ok=1 且 list=[]）
+    if ok and posts == 0 and raw_ok != 1:
+        ok = False
+    if status == 200 and raw_ok == 1 and not auth_wall and err is None:
+        ok = True
+    return PageResult(
+        uid=uid,
+        endpoint="weibo.com/ajax/statuses/mymblog",
+        page=page,
+        ok=ok,
+        http_status=status,
+        latency_ms=round(latency, 1),
+        posts=posts,
+        total_hint=total_hint,
+        error=err,
+        auth_wall=auth_wall,
+        rate_limited=bool(err and "rate_or_forbidden" in (err or "")),
+        final_url=final_url,
+        raw_ok=raw_ok,
+    )
+
+
 def probe_guest_cardlist(
     opener: urllib.request.OpenerDirector,
     uid: str,
@@ -507,6 +603,13 @@ def verdict_from(report: dict[str, Any]) -> str:
     if report["pages_tried"] == 0:
         return "未发起请求（dry-run 或无 UID）"
     profile_ok = report.get("profile_ok_count", 0)
+    pc_posts = report.get("pc_posts_fetched", 0)
+    if pc_posts > 0:
+        return (
+            "有登录 Cookie 时，weibo.com/ajax 可按 UID 抽样读到博文；"
+            "m.weibo.cn 仍常登录墙。"
+            "这只证明小样本可读，不证明 9 万用户全量可行（限流/风控/合规仍卡死全量）。"
+        )
     if report["auth_wall_hits"] > 0 and report["posts_fetched"] == 0:
         extra = (
             f"资料接口可通 ({profile_ok}/{report['uid_count']})，但博文时间线全部登录墙。"
@@ -583,83 +686,82 @@ def main() -> int:
         )
 
     opener = build_opener(cookie)
+    pc_opener = build_opener(cookie, desktop=True) if cookie else None
     all_results: list[PageResult] = []
     timeline_results: list[PageResult] = []
     summaries: dict[str, UidSummary] = {u: UidSummary(uid=u) for u in uids}
 
-    for i, uid in enumerate(uids):
-        # 1) 资料接口（常可匿名）
-        profile = probe_profile(opener, uid, args.timeout)
-        all_results.append(profile)
-        s = summaries[uid]
-        s.latencies_ms.append(profile.latency_ms)
-        if profile.ok:
-            s.profile_ok = True
-            s.screen_name = profile.screen_name
-        if profile.auth_wall:
-            s.auth_wall = True
-        if profile.error:
-            s.errors.append(f"profile:{profile.error}")
-        flag = "OK" if profile.ok else "FAIL"
-        name = f" name={profile.screen_name}" if profile.screen_name else ""
-        err = f" err={profile.error}" if profile.error else ""
-        print(
-            f"[{flag}] uid={uid} profile status={profile.http_status} "
-            f"{profile.latency_ms:.0f}ms{name}{err}"
-        )
-        time.sleep(args.delay)
-
-        # 2) m.weibo.cn 时间线分页
-        for page in range(1, args.max_pages + 1):
-            result = probe_page(opener, uid, page, args.timeout)
-            all_results.append(result)
+    def record(result: PageResult, *, timeline: bool, label: str) -> None:
+        all_results.append(result)
+        s = summaries[result.uid]
+        s.latencies_ms.append(result.latency_ms)
+        if timeline:
             timeline_results.append(result)
             s.pages_tried += 1
-            s.latencies_ms.append(result.latency_ms)
             if result.ok:
                 s.pages_ok += 1
                 s.posts_fetched += result.posts
                 if result.total_hint is not None:
                     s.total_hint = result.total_hint
-            if result.auth_wall:
-                s.auth_wall = True
-            if result.rate_limited:
-                s.rate_limited = True
-            if result.error:
-                s.errors.append(f"timeline_p{page}:{result.error}")
-            flag = "OK" if result.ok else "FAIL"
-            extra = (
-                f" posts={result.posts}"
-                if result.ok
-                else f" err={result.error} raw_ok={result.raw_ok}"
-            )
-            print(
-                f"[{flag}] uid={uid} timeline page={page} status={result.http_status} "
-                f"{result.latency_ms:.0f}ms{extra}"
-            )
+        elif result.ok:
+            s.profile_ok = True
+            if result.screen_name:
+                s.screen_name = result.screen_name
+            if result.total_hint is not None and s.total_hint is None:
+                s.total_hint = result.total_hint
+        if result.auth_wall:
+            s.auth_wall = True
+        if result.rate_limited:
+            s.rate_limited = True
+        if result.error:
+            s.errors.append(f"{label}:{result.error}")
+        flag = "OK" if result.ok else "FAIL"
+        extra = ""
+        if result.screen_name:
+            extra += f" name={result.screen_name}"
+        if result.ok:
+            extra += f" posts={result.posts}"
+            if result.total_hint is not None:
+                extra += f" statuses_count≈{result.total_hint}"
+        elif result.error:
+            extra += f" err={result.error}"
+            if result.raw_ok is not None:
+                extra += f" raw_ok={result.raw_ok}"
+        page_bit = f" page={result.page}" if result.page else ""
+        print(
+            f"[{flag}] uid={result.uid} {label}{page_bit} "
+            f"status={result.http_status} {result.latency_ms:.0f}ms{extra}"
+        )
+
+    for i, uid in enumerate(uids):
+        # 0) PC Cookie 通道（weibo.com/ajax）——与你从网页复制的 Cookie 匹配
+        if pc_opener is not None:
+            pc_profile = probe_pc_profile(pc_opener, uid, args.timeout)
+            record(pc_profile, timeline=False, label="pc/profile")
+            time.sleep(args.delay)
+            for page in range(1, args.max_pages + 1):
+                pc_tl = probe_pc_timeline(pc_opener, uid, page, args.timeout)
+                record(pc_tl, timeline=True, label="pc/mymblog")
+                time.sleep(args.delay)
+                if pc_tl.auth_wall or pc_tl.rate_limited:
+                    break
+
+        # 1) 资料接口（常可匿名；有 Cookie 时也可能校验失败，属对照）
+        profile = probe_profile(opener, uid, args.timeout)
+        record(profile, timeline=False, label="mobile/profile")
+        time.sleep(args.delay)
+
+        # 2) m.weibo.cn 时间线分页
+        for page in range(1, args.max_pages + 1):
+            result = probe_page(opener, uid, page, args.timeout)
+            record(result, timeline=True, label="m.weibo/timeline")
             time.sleep(args.delay)
             if result.auth_wall or result.rate_limited:
                 break
 
         # 3) guest/cardlist 对照
         guest = probe_guest_cardlist(opener, uid, args.timeout)
-        all_results.append(guest)
-        timeline_results.append(guest)
-        s.pages_tried += 1
-        s.latencies_ms.append(guest.latency_ms)
-        if guest.ok:
-            s.pages_ok += 1
-            s.posts_fetched += guest.posts
-        if guest.auth_wall:
-            s.auth_wall = True
-        if guest.error:
-            s.errors.append(f"guest:{guest.error}")
-        flag = "OK" if guest.ok else "FAIL"
-        extra = f" posts={guest.posts}" if guest.ok else f" err={guest.error}"
-        print(
-            f"[{flag}] uid={uid} guest/cardlist status={guest.http_status} "
-            f"{guest.latency_ms:.0f}ms{extra}"
-        )
+        record(guest, timeline=True, label="guest/cardlist")
         if i < len(uids) - 1:
             time.sleep(args.delay)
 
@@ -668,6 +770,11 @@ def main() -> int:
     pages_ok = sum(1 for r in timeline_results if r.ok)
     success_rate = (pages_ok / pages_tried) if pages_tried else 0.0
     posts_fetched = sum(r.posts for r in timeline_results if r.ok)
+    pc_posts = sum(
+        r.posts
+        for r in timeline_results
+        if r.ok and r.endpoint.endswith("mymblog")
+    )
     report = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "uid_count": len(uids),
@@ -681,6 +788,7 @@ def main() -> int:
         "pages_ok": pages_ok,
         "page_success_rate": success_rate,
         "posts_fetched": posts_fetched,
+        "pc_posts_fetched": pc_posts,
         "auth_wall_hits": sum(1 for r in all_results if r.auth_wall),
         "rate_limit_hits": sum(1 for r in all_results if r.rate_limited),
         "latencies_ms": latencies,
@@ -695,6 +803,8 @@ def main() -> int:
             statistics.median(latencies) if latencies else None,
         ),
         "channels": [
+            "weibo.com/ajax/profile/info",
+            "weibo.com/ajax/statuses/mymblog",
             "api.weibo.cn/2/profile",
             "m.weibo.cn/api/container/getIndex",
             "api.weibo.cn/2/guest/cardlist",
