@@ -381,6 +381,38 @@ def mp_url(path: str, common: dict[str, str], extra: dict[str, str]) -> str:
     return f"https://api.weibo.cn{path}?{urllib.parse.urlencode(q)}"
 
 
+_SENSITIVE_QUERY_KEYS = {
+    "gsid",
+    "cookie",
+    "sub",
+    "subp",
+    "scf",
+    "wbpsess",
+    "access_token",
+    "aid",
+}
+
+
+def redact_url(url: str | None) -> str | None:
+    """报告里去掉 gsid 等敏感 query，避免密钥落盘。"""
+    if not url:
+        return url
+    try:
+        parts = urllib.parse.urlsplit(url)
+        q = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        redacted = []
+        for k, v in q:
+            if k.lower() in _SENSITIVE_QUERY_KEYS:
+                redacted.append((k, "[REDACTED]"))
+            else:
+                redacted.append((k, v))
+        return urllib.parse.urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, urllib.parse.urlencode(redacted), parts.fragment)
+        )
+    except Exception:  # noqa: BLE001
+        return "[redact_failed]"
+
+
 def probe_mp_users_show(
     opener: urllib.request.OpenerDirector,
     common: dict[str, str],
@@ -1077,7 +1109,9 @@ def main() -> int:
         "rate_limit_hits": sum(1 for r in all_results if r.rate_limited),
         "latencies_ms": latencies,
         "per_uid": {u: asdict(summaries[u]) for u in uids},
-        "results": [asdict(r) for r in all_results],
+        "results": [
+            {**asdict(r), "final_url": redact_url(r.final_url)} for r in all_results
+        ],
         "estimate_90k": estimate(
             args.target_users,
             args.assume_posts_per_user,
