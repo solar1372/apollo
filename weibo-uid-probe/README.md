@@ -16,15 +16,24 @@ python3 weibo-uid-probe/probe.py --uids 2803301701 1669879400
 # 从文件读 UID
 python3 weibo-uid-probe/probe.py --uids-file weibo-uid-probe/uids.sample.txt --max-uids 3 --max-pages 2
 
-# 若你有自己的登录 Cookie（仅测「有登录态」差异；勿提交 Cookie）
+# 带登录 Cookie 再测（推荐用文件，勿把 Cookie 提交进 git / 贴到聊天）
+# 浏览器登录 m.weibo.cn → F12 → Network → 任意请求 → 复制 Request Headers 里的 Cookie
+cat > /tmp/weibo.cookie <<'EOF'
+SUB=xxx; SUBP=xxx; SCF=xxx; SUHB=xxx; _T_WM=xxx
+EOF
+python3 weibo-uid-probe/probe.py --cookie-file /tmp/weibo.cookie --uids-file weibo-uid-probe/uids.sample.txt
+
+# 或环境变量
 export WEIBO_COOKIE='SUB=...; SUBP=...'
-python3 weibo-uid-probe/probe.py --uids-file weibo-uid-probe/uids.sample.txt
+python3 weibo-uid-probe/probe.py --uids 2803301701
 
 # 只看估算、不发请求
 python3 weibo-uid-probe/probe.py --dry-run --uids-file weibo-uid-probe/uids.sample.txt
 ```
 
-报告默认写到当前目录 `probe_report.json`。
+关键字段至少要有 **`SUB` + `SUBP`**（登录后才有）。访客 Cookie 不够，时间线仍会 `ok=-100`。
+
+报告默认写到当前目录 `probe_report.json`。Cookie 不会写入报告正文（只记是否提供、有哪些关键 key 名）。
 
 ## 探测的接口
 

@@ -87,7 +87,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--cookie",
         default=os.environ.get("WEIBO_COOKIE", ""),
-        help="可选 Cookie（也可用环境变量 WEIBO_COOKIE）。未登录通常会撞登录墙。",
+        help="可选 Cookie 字符串（也可用环境变量 WEIBO_COOKIE）。勿把真实 Cookie 提交进仓库。",
+    )
+    p.add_argument(
+        "--cookie-file",
+        help="从文件读取 Cookie（推荐：一行完整 Cookie，避免出现在 shell 历史里）",
     )
     p.add_argument(
         "--max-uids",
@@ -169,6 +173,40 @@ def load_uids(args: argparse.Namespace) -> list[str]:
             seen.add(u)
             out.append(u)
     return out[: args.max_uids]
+
+
+def resolve_cookie(args: argparse.Namespace) -> str:
+    cookie = (args.cookie or "").strip()
+    if args.cookie_file:
+        with open(args.cookie_file, encoding="utf-8") as f:
+            # 允许文件里写注释行；取第一条非空非 # 行
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                cookie = line
+                break
+    return cookie
+
+
+def cookie_diagnostics(cookie: str) -> dict[str, Any]:
+    """粗检 Cookie 是否像登录态（不打印任何 Cookie 值）。"""
+    names = set()
+    for part in cookie.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        names.add(part.split("=", 1)[0].strip())
+    important = ["SUB", "SUBP", "SCF", "SUHB", "_T_WM", "XSRF-TOKEN", "MLOGIN", "SSOLoginState"]
+    present = [n for n in important if n in names]
+    return {
+        "length": len(cookie),
+        "key_count": len(names),
+        "has_sub": "SUB" in names,
+        "has_subp": "SUBP" in names,
+        "important_keys_present": present,
+        "looks_logged_in": "SUB" in names and "SUBP" in names,
+    }
 
 
 def build_opener(cookie: str) -> urllib.request.OpenerDirector:
@@ -499,6 +537,9 @@ def main() -> int:
         uids = ["2803301701", "1669879400", "1934184475"][: args.max_uids]
         print("[info] 未提供 UID，使用内置样例 UID 做探测", file=sys.stderr)
 
+    cookie = resolve_cookie(args)
+    cookie_meta = cookie_diagnostics(cookie) if cookie else {"provided": False}
+
     if args.dry_run:
         est = estimate(
             args.target_users,
@@ -508,10 +549,40 @@ def main() -> int:
             0.0,
             None,
         )
-        print(json.dumps({"uids": uids, "estimate": est}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "uids": uids,
+                    "cookie": {"provided": bool(cookie), **(cookie_meta if cookie else {})},
+                    "estimate": est,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
-    opener = build_opener(args.cookie)
+    if cookie:
+        print(
+            "[info] 已加载 Cookie: "
+            f"keys≈{cookie_meta.get('key_count')} "
+            f"SUB={cookie_meta.get('has_sub')} "
+            f"SUBP={cookie_meta.get('has_subp')} "
+            f"looks_logged_in={cookie_meta.get('looks_logged_in')}",
+            file=sys.stderr,
+        )
+        if not cookie_meta.get("looks_logged_in"):
+            print(
+                "[warn] Cookie 里未见 SUB/SUBP，m.weibo.cn 时间线仍可能 ok=-100",
+                file=sys.stderr,
+            )
+    else:
+        print(
+            "[info] 未提供 Cookie。可用 --cookie-file / WEIBO_COOKIE / --cookie 注入登录态后再测",
+            file=sys.stderr,
+        )
+
+    opener = build_opener(cookie)
     all_results: list[PageResult] = []
     timeline_results: list[PageResult] = []
     summaries: dict[str, UidSummary] = {u: UidSummary(uid=u) for u in uids}
@@ -603,7 +674,8 @@ def main() -> int:
         "uids": uids,
         "max_pages": args.max_pages,
         "delay_s": args.delay,
-        "has_cookie": bool(args.cookie),
+        "has_cookie": bool(cookie),
+        "cookie_meta": cookie_meta if cookie else {"provided": False},
         "profile_ok_count": sum(1 for u in uids if summaries[u].profile_ok),
         "pages_tried": pages_tried,
         "pages_ok": pages_ok,
